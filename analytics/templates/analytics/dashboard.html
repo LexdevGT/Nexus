@@ -1,0 +1,317 @@
+<!-- analytics/templates/analytics/dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-6">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Tribal Nexus Analytics</h1>
+        </header>
+
+        <!-- Filtros -->
+        <div class="mb-6 bg-white rounded-lg shadow p-4">
+            <div class="flex gap-4">
+                <select id="timeFilter" class="border rounded p-2">
+                    <option value="all">Todo el tiempo</option>
+                    <option value="month">Último mes</option>
+                    <option value="quarter">Último trimestre</option>
+                </select>
+                <select id="developerFilter" class="border rounded p-2">
+                    <option value="all">Todos los desarrolladores</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- KPIs -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-gray-500 text-sm">Total Tareas</h3>
+                <p class="text-2xl font-bold" id="totalTasks">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-gray-500 text-sm">Tasa de Completitud</h3>
+                <p class="text-2xl font-bold" id="completionRate">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-gray-500 text-sm">Total Puntos</h3>
+                <p class="text-2xl font-bold" id="totalPoints">-</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-gray-500 text-sm">Tiempo Promedio</h3>
+                <p class="text-2xl font-bold" id="avgTime">-</p>
+            </div>
+        </div>
+
+        <!-- Gráficos -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-xl font-semibold mb-4">Puntos por Desarrollador</h2>
+                <div id="devPointsChart"></div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-xl font-semibold mb-4">Tasa de Completitud</h2>
+                <div id="completionChart"></div>
+            </div>
+        </div>
+
+        <!-- Actividad Reciente -->
+        <div class="bg-white rounded-lg shadow p-4 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Actividad Reciente</h2>
+            <div id="recentActivity" class="space-y-2">
+                <!-- Actividades recientes se insertarán aquí -->
+            </div>
+        </div>
+
+        <!-- Chat IA -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h2 class="text-xl font-semibold mb-4">Consulta IA</h2>
+            <div class="flex gap-4 mb-4">
+                <input type="text" id="aiQuery"
+                       class="flex-1 border rounded p-2"
+                       placeholder="Pregunta sobre los datos...">
+                <button onclick="askAI()"
+                        class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Preguntar
+                </button>
+            </div>
+            <div id="aiResponse" class="bg-gray-50 p-4 rounded hidden">
+                <!-- Respuesta de IA irá aquí -->
+            </div>
+        </div>
+    </div>
+
+   <script>
+        // Variables globales para mantener los datos
+        let globalData = null;
+        let developersList = [];
+
+        // Función para cargar los datos iniciales
+        async function loadData() {
+            try {
+                console.log("Cargando datos...");
+                const response = await fetch('/api/chart-data/');
+                const data = await response.json();
+                console.log("Datos recibidos:", data);
+
+                if (data.status === 'success') {
+                    globalData = data.data;
+                    // Actualizar lista de desarrolladores
+                    updateDevelopersList(data.data.developer_metrics);
+                    // Actualizar el dashboard
+                    updateDashboard(data.data);
+                } else {
+                    console.error("Error en los datos:", data.message);
+                }
+            } catch (error) {
+                console.error("Error al cargar datos:", error);
+            }
+        }
+
+        // Función para actualizar la lista de desarrolladores en el filtro
+        function updateDevelopersList(developers) {
+            const developerSelect = document.getElementById('developerFilter');
+            developerSelect.innerHTML = '<option value="all">Todos los desarrolladores</option>';
+
+            developers.forEach(dev => {
+                const option = document.createElement('option');
+                option.value = dev.name;
+                option.textContent = dev.name;
+                developerSelect.appendChild(option);
+            });
+        }
+
+        // Función para filtrar datos
+        function filterData() {
+            if (!globalData) return;
+
+            const timeFilter = document.getElementById('timeFilter').value;
+            const developerFilter = document.getElementById('developerFilter').value;
+
+            let filteredData = {...globalData};
+
+            // Filtrar por desarrollador
+            if (developerFilter !== 'all') {
+                filteredData.developer_metrics = globalData.developer_metrics.filter(
+                    dev => dev.name === developerFilter
+                );
+                // Recalcular métricas sumarias basadas en el desarrollador seleccionado
+                const selectedDev = filteredData.developer_metrics[0];
+                if (selectedDev) {
+                    filteredData.summary = {
+                        ...filteredData.summary,
+                        total_tasks: selectedDev.total_tasks,
+                        completed_tasks: selectedDev.completed_tasks,
+                        completion_rate: selectedDev.completion_rate,
+                        total_story_points: selectedDev.story_points
+                    };
+                }
+            }
+
+            // Aplicar filtro de tiempo a las actividades recientes
+            if (timeFilter !== 'all') {
+                const now = new Date();
+                let cutoffDate = new Date();
+
+                switch (timeFilter) {
+                    case 'month':
+                        cutoffDate.setMonth(now.getMonth() - 1);
+                        break;
+                    case 'quarter':
+                        cutoffDate.setMonth(now.getMonth() - 3);
+                        break;
+                }
+
+                filteredData.recent_activity = filteredData.recent_activity.filter(activity => {
+                    const activityDate = new Date(activity.updated);
+                    return activityDate >= cutoffDate;
+                });
+            }
+
+            updateDashboard(filteredData);
+        }
+
+        // Función para actualizar el dashboard
+        function updateDashboard(data) {
+            console.log("Actualizando dashboard con:", data);
+
+            // Actualizar KPIs
+            updateKPIs(data.summary);
+
+            // Actualizar gráficos
+            updateDeveloperChart(data.developer_metrics);
+            updateCompletionChart(data.developer_metrics);
+
+            // Actualizar actividad reciente
+            updateRecentActivity(data.recent_activity);
+        }
+
+        function updateKPIs(summary) {
+            if (!summary) return;
+
+            document.getElementById('totalTasks').textContent = summary.total_tasks || 0;
+            document.getElementById('completionRate').textContent =
+                `${(summary.completion_rate || 0).toFixed(1)}%`;
+            document.getElementById('totalPoints').textContent =
+                (summary.total_story_points || 0).toFixed(1);
+            document.getElementById('avgTime').textContent =
+                `${(summary.avg_completion_time || 0).toFixed(1)}h`;
+        }
+
+        function updateDeveloperChart(metrics) {
+            if (!metrics || !metrics.length) return;
+
+            const data = [{
+                x: metrics.map(d => d.name),
+                y: metrics.map(d => d.story_points),
+                type: 'bar',
+                name: 'Story Points',
+                marker: {
+                    color: 'rgb(54, 162, 235)'
+                }
+            }];
+
+            const layout = {
+                margin: { t: 20, b: 40, l: 60, r: 20 },
+                yaxis: {
+                    title: 'Story Points',
+                    tickformat: '.1f'
+                },
+                showlegend: false
+            };
+
+            Plotly.newPlot('devPointsChart', data, layout);
+        }
+
+        function updateCompletionChart(metrics) {
+            if (!metrics || !metrics.length) return;
+
+            const data = [{
+                values: metrics.map(d => d.completed_tasks),
+                labels: metrics.map(d => d.name),
+                type: 'pie',
+                hole: 0.4,
+                marker: {
+                    colors: metrics.map((_, index) =>
+                        `hsl(${(index * 360/metrics.length)}, 70%, 50%)`)
+                }
+            }];
+
+            const layout = {
+                margin: { t: 20, b: 20, l: 20, r: 20 },
+                showlegend: true,
+                legend: {
+                    orientation: 'h',
+                    y: -0.2
+                }
+            };
+
+            Plotly.newPlot('completionChart', data, layout);
+        }
+
+        function updateRecentActivity(activities) {
+            if (!activities || !activities.length) return;
+
+            const activityHtml = activities.map(activity => `
+                <div class="border-b py-2">
+                    <div class="font-medium">${activity.summary}</div>
+                    <div class="text-sm text-gray-500">
+                        ${activity.assignee} - ${activity.status}
+                        <span class="ml-2 text-xs">${activity.updated}</span>
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('recentActivity').innerHTML = activityHtml;
+        }
+
+        async function askAI() {
+            const queryInput = document.getElementById('aiQuery');
+            const query = queryInput.value.trim();
+            const responseDiv = document.getElementById('aiResponse');
+
+            if (!query) return;
+
+            try {
+                responseDiv.innerHTML = 'Analizando...';
+                responseDiv.classList.remove('hidden');
+
+                const response = await fetch(`/api/analyze-data/?query=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                responseDiv.innerHTML = `
+                    <div class="font-medium">Pregunta:</div>
+                    <div class="mb-2">${query}</div>
+                    <div class="font-medium">Respuesta:</div>
+                    <div>${data.response}</div>
+                `;
+            } catch (error) {
+                responseDiv.innerHTML = 'Error al procesar la consulta';
+                console.error('Error:', error);
+            }
+        }
+
+        // Event Listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            loadData();
+
+            // Agregar listeners para filtros
+            document.getElementById('timeFilter').addEventListener('change', filterData);
+            document.getElementById('developerFilter').addEventListener('change', filterData);
+
+            // Listener para el chat
+            document.getElementById('aiQuery').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    askAI();
+                }
+            });
+        });
+        </script>
+</body>
+</html>
